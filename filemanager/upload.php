@@ -8,7 +8,7 @@ try {
     include 'include/utils.php';
 
     if ($_SESSION['RF']["verify"] != "RESPONSIVEfilemanager") {
-        response(trans('forbiden') . AddErrorLocation(), 403)->send();
+        response(trans('forbidden') . AddErrorLocation(), 403)->send();
         exit;
     }
 
@@ -35,7 +35,7 @@ try {
     $fldr = rawurldecode(trim(strip_tags($_POST['fldr']), "/") . "/");
 
     if (!checkRelativePath($fldr)) {
-        response(trans('wrong path').AddErrorLocation())->send();
+        response(trans('wrong path') . AddErrorLocation())->send();
         exit;
     }
 
@@ -50,8 +50,21 @@ try {
             $cycle = false;
         }
         if (file_exists($path . "config.php")) {
+            $configMain = $config;
             $configTemp = include $path . 'config.php';
-            $config = array_merge($config, $configTemp);
+            if(is_array($configTemp) && count($configTemp) > 0){
+                $config = array_merge($configMain, $configTemp);
+                $config['ext'] = array_merge(
+                    $config['ext_img'],
+                    $config['ext_file'],
+                    $config['ext_misc'],
+                    $config['ext_video'],
+                    $config['ext_music']
+                );
+            }
+            else{
+                $config = $configMain;
+            }
             //TODO switch to array
             $cycle = false;
         }
@@ -63,35 +76,36 @@ try {
     if (trans("Upload_error_messages") !== "Upload_error_messages") {
         $messages = trans("Upload_error_messages");
     }
+    if ($config['url_upload']) {
+        // make sure the length is limited to avoid DOS attacks
+        if (isset($_POST['url']) && strlen($_POST['url']) < 2000) {
+            $url = $_POST['url'];
+            $urlPattern = '/^(https?:\/\/)?([\da-z\.-]+\.[a-z\.]{2,6}|[\d\.]+)([\/?=&#]{1}[\da-z\.-]+)*[\/\?]?$/i';
 
-    // make sure the length is limited to avoid DOS attacks
-    if (isset($_POST['url']) && strlen($_POST['url']) < 2000) {
-        $url = $_POST['url'];
-        $urlPattern = '/^(https?:\/\/)?([\da-z\.-]+\.[a-z\.]{2,6}|[\d\.]+)([\/?=&#]{1}[\da-z\.-]+)*[\/\?]?$/i';
+            if (preg_match($urlPattern, $url)) {
+                $temp = tempnam('/tmp', 'RF');
 
-        if (preg_match($urlPattern, $url)) {
-            $temp = tempnam('/tmp', 'RF');
-
-            $ch = curl_init($url);
-            $fp = fopen($temp, 'wb');
-            curl_setopt($ch, CURLOPT_FILE, $fp);
-            curl_setopt($ch, CURLOPT_HEADER, 0);
-            curl_exec($ch);
-            if (curl_errno($ch)) {
+                $ch = curl_init($url);
+                $fp = fopen($temp, 'wb');
+                curl_setopt($ch, CURLOPT_FILE, $fp);
+                curl_setopt($ch, CURLOPT_HEADER, 0);
+                curl_exec($ch);
+                if (curl_errno($ch)) {
+                    curl_close($ch);
+                    throw new Exception('Invalid URL');
+                }
                 curl_close($ch);
-                throw new Exception('Invalid URL');
-            }
-            curl_close($ch);
-            fclose($fp);
+                fclose($fp);
 
-            $_FILES['files'] = array(
-                'name' => array(basename($_POST['url'])),
-                'tmp_name' => array($temp),
-                'size' => array(filesize($temp)),
-                'type' => null
-            );
-        } else {
-            throw new Exception('Is not a valid URL.');
+                $_FILES['files'] = array(
+                    'name' => array(basename($_POST['url'])),
+                    'tmp_name' => array($temp),
+                    'size' => array(filesize($temp)),
+                    'type' => null
+                );
+            } else {
+                throw new Exception('Is not a valid URL.');
+            }
         }
     }
 
@@ -118,8 +132,10 @@ try {
     }
     $_FILES['files']['name'][0] = fix_filename($filename, $config);
 
+    if(!$_FILES['files']['type'][0]){
+        $_FILES['files']['type'][0] = $mime_type;
 
-
+    }
     // LowerCase
     if ($config['lower_case']) {
         $_FILES['files']['name'][0] = fix_strtolower($_FILES['files']['name'][0]);
@@ -146,15 +162,18 @@ try {
         'correct_image_extensions' => true,
         'print_response' => false
     );
+
     if (!$config['ext_blacklist']) {
         $uploadConfig['accept_file_types'] = '/\.(' . implode('|', $config['ext']) . ')$/i';
-        if($config['files_without_extension']){
-        	$uploadConfig['accept_file_types'] = '/((\.(' . implode('|', $config['ext']) . ')$)|(^[^.]+$))$/i';
+
+        if ($config['files_without_extension']) {
+            $uploadConfig['accept_file_types'] = '/((\.(' . implode('|', $config['ext']) . ')$)|(^[^.]+$))$/i';
         }
     } else {
         $uploadConfig['accept_file_types'] = '/\.(?!' . implode('|', $config['ext_blacklist']) . '$)/i';
-        if($config['files_without_extension']){
-        	$uploadConfig['accept_file_types'] = '/((\.(?!' . implode('|', $config['ext_blacklist']) . '$))|(^[^.]+$))/i';
+
+        if ($config['files_without_extension']) {
+            $uploadConfig['accept_file_types'] = '/((\.(?!' . implode('|', $config['ext_blacklist']) . '$))|(^[^.]+$))/i';
         }
     }
 
@@ -162,15 +181,19 @@ try {
         if (!is_dir($config['ftp_temp_folder'])) {
             mkdir($config['ftp_temp_folder'], $config['folderPermission'], true);
         }
+
         if (!is_dir($config['ftp_temp_folder'] . "thumbs")) {
             mkdir($config['ftp_temp_folder'] . "thumbs", $config['folderPermission'], true);
         }
+
         $uploadConfig['upload_dir'] = $config['ftp_temp_folder'];
     }
 
+    //print_r($_FILES);die();
     $upload_handler = new UploadHandler($uploadConfig, true, $messages);
 } catch (Exception $e) {
     $return = array();
+
     if ($_FILES['files']) {
         foreach ($_FILES['files']['name'] as $i => $name) {
             $return[] = array(
@@ -185,5 +208,5 @@ try {
         return;
     }
 
-    echo json_encode(array("error" =>$e->getMessage()));
+    echo json_encode(array("error" => $e->getMessage()));
 }
